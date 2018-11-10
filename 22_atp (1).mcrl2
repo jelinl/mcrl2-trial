@@ -1,0 +1,104 @@
+sort ftrack = struct ERTMS|ATP;
+sort fstop = struct STOP| NO;
+sort temp = struct brakes | nobrakes;
+sort mode = struct emergencybraking?isemergencybraking|stop?issstop|specialfrequency?isspecialfrequency|stopemergencybraking?isstopemergencybraking|idle?isidle|normal?isnormal|sendwarningsignal?issendwarningsignal;
+sort brakestatus = struct APPLIED|RELEASED;
+sort brakes = struct applybrake|releasebrake;
+sort currentlimit= struct forty|sixty|eighty|onehundredtwenty|onehundredthirty;
+sort instantaneous_speed = struct sp1|sp2|sp3|sp4|sp5;
+
+
+map istrack: ftrack -> Bool;
+	isstop: fstop -> Bool;
+   instantaneous_speed: instantaneous_speed->Pos;
+	currentlimit: currentlimit->Pos;
+var v: currentlimit;
+    i: instantaneous_speed;
+
+eqn istrack(ERTMS)= true;
+    istrack(ATP)= false;
+	  isstop(STOP)=true;
+    isstop(NO)=false;
+	 (v==forty)-> currentlimit(v)=40;
+    (v==sixty)->currentlimit(v)=60;
+(v==eighty)->currentlimit(v)=80;
+(v==onehundredtwenty)->currentlimit(v)=120;
+(v==onehundredthirty)->currentlimit(v)=130;
+(i==sp1)->instantaneous_speed(i) = 20;
+(i==sp2)->instantaneous_speed(i) = 50;
+(i==sp3)->instantaneous_speed(i) = 70;
+(i==sp4)->instantaneous_speed(i) = 100;
+(i==sp5)->instantaneous_speed(i) = 140;
+
+
+act reset;
+	  sendbrake;
+    receivebrake;
+    applybrake;
+    Stopsignal;
+    senseERTMStrack;
+    senseATPtrack;
+    sendERTMStrack;
+    sendATPtrack;
+    ReceiveERTMStrack;
+    ReceiveATPtrack;
+    setidle;
+    uninterrupted;
+    interrupted;
+    ringbell;receiveoverspeed: Bool;sendoverspeed: Bool;
+    overspeed: Bool;getspeed: instantaneous_speed # currentlimit;
+    allowSpeedAbove40;
+    specialfrequencydetected;
+    sendcomputedparameters;
+	 stopSpecialFrequency;
+	 remainidle;checkthreshold;ringbellthrice;releasebrake;
+	 passengertrain,freighttrain;
+   sendmode;receivemode;sensemode;
+
+proc speedsense = receivemode.sum c: instantaneous_speed, d: currentlimit.getspeed(c,d).(instantaneous_speed(c)>currentlimit(d))->sendoverspeed(true).speedsense<>sendoverspeed(false).speedsense;
+
+proc ATP1 (m: mode, t: ftrack)= (m==normal)-> (receiveoverspeed(true).ATP1(sendwarningsignal, ATP) + receiveoverspeed(false).(receivebrake.ATP1(stopemergencybraking, ATP)+ 
+
+                                   specialfrequencydetected.ATP1(specialfrequency, ATP) + 
+
+                                   ReceiveERTMStrack.(t== ATP)->sendcomputedparameters.ATP1(idle, ERTMS))) + 
+                          
+                                  ((isnormal(m))&& (t==ATP))->(sendmode.ATP1(normal,ATP))+ 
+
+ isspecialfrequency(m)->(allowSpeedAbove40.(stopSpecialFrequency.ATP1(normal, ATP)+receivebrake.ATP1(stopemergencybraking, ATP)+ 
+
+                                  (t==ERTMS)->setidle.ATP1(idle,ERTMS)<>setidle.ATP1(idle,ATP) +
+
+                                   ReceiveERTMStrack.(t== ATP)->sendcomputedparameters.ATP1(idle, ERTMS))+receivebrake.ATP1(stopemergencybraking, ATP)+
+ 
+                                   (t==ATP)->ReceiveERTMStrack.sendcomputedparameters.ATP1(idle, ERTMS))+
+
+                                  (issendwarningsignal(m) && t==ATP) -> (ringbell.(interrupted.ATP1(normal,ATP) +
+
+                                   uninterrupted.ATP1(emergencybraking,ATP) + ReceiveERTMStrack.(t== ATP)->sendcomputedparameters.ATP1(idle, ERTMS)+
+
+                                   receivebrake.ATP1(stopemergencybraking, ATP))+receivebrake.ATP1(stopemergencybraking, ATP)+
+
+                                   ReceiveERTMStrack.(t== ATP)->sendcomputedparameters.ATP1(idle, ERTMS)) + 
+
+                                   isemergencybraking(m)->(passengertrain.applybrake.ATP1(stop, ATP)+ freighttrain.
+
+                                   applybrake.checkthreshold.ringbellthrice.releasebrake.ATP1(normal,ATP))+
+
+                                   issstop(m)->reset.ATP1(normal, ATP)+isstopemergencybraking(m)->applybrake.ATP1(stop,ATP) +
+
+                                   (isidle(m)&& (t==ERTMS))-> ReceiveATPtrack.ATP1(normal,ATP) + 
+
+                                   (isidle(m)&& (t==ATP))-> (ReceiveERTMStrack.(t== ATP)->sendcomputedparameters.ATP1(idle, ERTMS) + stopSpecialFrequency.ATP1(normal,ATP));
+
+
+%ATPvv
+proc ATP3=sendbrake.ATP3;
+
+proc ATP2= sendATPtrack.ATP2 + sendERTMStrack.ATP2;
+
+init allow ({remainidle,reset,applybrake,Stopsignal,senseATPtrack,senseERTMStrack,passengertrain,freighttrain,
+setidle,interrupted,uninterrupted,overspeed,ringbell,specialfrequencydetected,allowSpeedAbove40,sendcomputedparameters,stopSpecialFrequency,
+releasebrake,ringbellthrice,checkthreshold,getspeed,sensemode},
+comm ({sendbrake|receivebrake->Stopsignal, sendERTMStrack|ReceiveERTMStrack->senseERTMStrack, 
+sendATPtrack|ReceiveATPtrack->senseATPtrack,sendoverspeed|receiveoverspeed->overspeed, sendmode|receivemode->sensemode}, ATP1(normal, ATP)||ATP3|| ATP2||speedsense));
